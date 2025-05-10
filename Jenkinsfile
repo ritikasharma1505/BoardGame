@@ -81,7 +81,7 @@ pipeline {
             steps {
                 script {
                     withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') { // 🔐 Docker Hub credentials ID
-                        sh "docker build -t ritikasharma1505/boardGame:latest ."
+                        sh "docker build -t ritikasharma1505/boardgame:latest ."
                     }
                 }
             }
@@ -89,7 +89,7 @@ pipeline {
 
         stage('Docker Image Scan') {
             steps {
-                sh "trivy image --format table -o trivy-image-report.html ritikasharma1505/boardGame:latest"
+                sh "trivy image --format table -o trivy-image-report.html ritikasharma1505/boardgame:latest"
             }
         }
 
@@ -97,7 +97,7 @@ pipeline {
             steps {
                 script {
                     withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
-                        sh "docker push ritikasharma1505/boardGame:latest"
+                        sh "docker push ritikasharma1505/boardgame:latest"
                     }
                 }
             }
