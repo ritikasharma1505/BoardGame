@@ -1,32 +1,171 @@
 pipeline {
     agent any
-    
+
     tools {
-        maven 'maven3.6'
         jdk 'jdk17'
+        maven 'maven3'
+    }
+
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
     }
 
     stages {
-        
+        stage('Git Checkout') {
+            steps {
+                git branch: 'main',
+                    credentialsId: 'git-cred', // 🔐 GitHub token ID from Jenkins credentials
+                    url:' https://github.com/ritikasharma1505/BoardGame.git'
+            }
+        }
+
         stage('Compile') {
             steps {
-             sh 'mvn compile'
+                sh "mvn compile"
             }
         }
-        stage('test') {
+
+        stage('Test') {
             steps {
-                sh 'mvn test'
+                sh "mvn test"
             }
         }
-        stage('Package') {
+
+        stage('File System Scan') {
             steps {
-               sh 'mvn package'
+                sh "trivy fs --format table -o trivy-fs-report.html ."
             }
         }
-        stage('Hello') {
+
+        stage('SonarQube Analysis') {
             steps {
-                echo 'Hello World'
+                withSonarQubeEnv('sonar') { // 🔐 'sonar' must match your Jenkins SonarQube server config
+                    sh '''$SCANNER_HOME/bin/sonar-scanner \
+                        -Dsonar.projectName=BoardGame \
+                        -Dsonar.projectKey=BoardGame \
+                        -Dsonar.java.binaries=.
+                    '''
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'sonar-token' // 🔐 SonarQube token credential ID
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh "mvn package"
+            }
+        }
+
+        stage('Publish to Nexus') {
+            steps {
+                withMaven(
+                    globalMavenSettingsConfig: 'global-settings', // 🔐 optional, or set '' if not configured
+                    jdk: 'jdk17',
+                    maven: 'maven3',
+                    mavenSettingsConfig: '',
+                    traceability: true
+                ) {
+                    sh "mvn deploy"
+                }
+            }
+        }
+
+        stage('Build & Tag Docker Image') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') { // 🔐 Docker Hub credentials ID
+                        sh "docker build -t ritikasharma1505/boardGame:latest ."
+                    }
+                }
+            }
+        }
+
+        stage('Docker Image Scan') {
+            steps {
+                sh "trivy image --format table -o trivy-image-report.html ritikasharma1505/boardGame:latest"
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh "docker push ritikasharma1505/boardGame:latest"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                withKubeConfig(
+                    credentialsId: 'k8-cred', // 🔐 Kubeconfig credentials stored in Jenkins
+                    serverUrl: 'https://172.31.27.78:6443',
+                    clusterName: 'kubernetes',
+                    contextName: '',
+                    namespace: 'webapps'
+                ) {
+                    sh "kubectl apply -f deployment-service.yaml"
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                withKubeConfig(
+                    credentialsId: 'k8-cred',
+                    serverUrl: https://172.31.27.78:6443',
+                    clusterName: 'kubernetes',
+                    contextName: '',
+                    namespace: 'webapps'
+                ) {
+                    sh "kubectl get pods -n webapps"
+                    sh "kubectl get svc -n webapps"
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def jobName = env.JOB_NAME
+                def buildNumber = env.BUILD_NUMBER
+                def pipelineStatus = currentBuild.result ?: 'UNKNOWN'
+                def bannerColor = pipelineStatus.toUpperCase() == 'SUCCESS' ? 'green' : 'red'
+
+                def body = """
+                <html>
+                    <body>
+                        <div style="border: 4px solid ${bannerColor}; padding: 10px;">
+                            <h2>${jobName} - Build ${buildNumber}</h2>
+                            <div style="background-color: ${bannerColor}; padding: 10px;">
+                                <h3 style="color: white;">Pipeline Status: ${pipelineStatus.toUpperCase()}</h3>
+                            </div>
+                            <p>Check the <a href="${BUILD_URL}">console output</a>.</p>
+                        </div>
+                    </body>
+                </html>
+                """
+
+                emailext(
+                    subject: "${jobName} - Build ${buildNumber} - ${pipelineStatus.toUpperCase()}",
+                    body: body,
+                    to: 'ritikasharma1505@gmail.com', // 📧 Set your email
+                    from: 'jenkins@example.com',
+                    replyTo: 'jenkins@example.com',
+                    mimeType: 'text/html',
+                    attachmentsPattern: 'trivy-image-report.html'
+                )
             }
         }
     }
 }
+
